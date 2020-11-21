@@ -4,6 +4,6 @@ I started learning the Godot game engine in April 2020 as a quarantine project, 
 
 https://www.dropbox.com/sh/ysm6scd9pa8lvbh/AAALAVLLqBzigKwGV8MsVAc4a?dl=0
 
-Credit to Kenney and OpenGameArt for the image and sound assets.
+Credit to Kenney and OpenGameArt for the image and sound assets. \n
 https://kenney.nl/assets
 https://opengameart.org/
