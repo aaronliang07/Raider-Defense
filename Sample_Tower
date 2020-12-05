@@ -1,0 +1,111 @@
+# The script for a basic tower which covers functions required for all towers such as upgrades and selling.
+# All towers inherit this script and add their own specific functions
+
+extends Node2D
+
+var cost = 0
+var upgrade_cost = 0
+var damage = 0
+const sell_value = 0.8
+var target = null
+var level = 1
+var boost_level = 0
+# Variable to keep track of if this tower's UI is being displayed
+var current_tower
+
+signal sell
+
+func _ready():
+	$TowerUI.visible = false
+	$PowerUp.emitting = false
+	$TowerUI/TextureRect/VBoxContainer/CenterContainer/Upgrade/UpgradeInfo.visible = false
+	$Range.visible = false
+	add_to_group("Towers")	
+
+func adjust_ui():
+	# Making the TowerUI not be off screen
+	# Can't put in ready because has to happen after tower has been added as a child
+	if global_position.x > 760:
+		$TowerUI.global_position.x = 760
+	elif global_position.x < 75:
+		$TowerUI.global_position.x = 75
+	
+	if global_position.y > 435:
+		$TowerUI/TextureRect.rect_position.y = -175
+	
+func _on_Sell_pressed():
+	emit_signal("sell", cost, sell_value)
+	get_tree().call_group("Levels", "exit_tower_UI")
+	queue_free()
+
+func _on_Cancel_pressed():
+	get_tree().call_group("Levels", "exit_tower_UI")
+	exit_UI()
+
+func _on_MouseArea_gui_input(event):
+	if (event is InputEventMouseButton && event.pressed):
+		# Exiting the UIs of all other towers
+		# The "2" means execute immediately, calling groups are normally executed on idle
+		get_tree().call_group_flags(2, "Towers", "exit_UI")
+		display_UI()
+		global.select.play()
+
+func exit_UI():
+	current_tower = false
+	$Base.z_index = 0
+	$Tower.z_index = 0
+	$TowerUI.visible = false
+	$Range.visible = false
+
+func display_UI():
+	current_tower = true
+	# Making the tower render in front of everything so it's highlighted
+	$Base.z_index = 3
+	$Tower.z_index = 3
+	$TowerUI.visible = true
+	$Range.visible = true
+
+# Following four functions are for the generator's interaction with other towers
+func generator_boost(boost):
+	damage *= boost
+	boost_level += 1
+	$PowerUp.emitting = true
+	$PowerUp.visible = true
+	$PowerUp.amount = boost_level
+
+func lose_boost(boost):
+	damage = damage / boost
+	boost_level -= 1
+	if boost_level == 0:
+		$PowerUp.emitting = false
+		$PowerUp.visible = false
+
+func boost_range(range_multiplier):
+	$Range.scale *= range_multiplier
+
+func remove_range_multiplier(range_multiplier):
+	$Range.scale = $Range.scale / range_multiplier
+
+func _on_Upgrade_pressed():
+	pass
+
+# Functions below are to prevent accidental building when clicking on a tower UI button
+func _on_Upgrade_mouse_entered():
+	get_tree().call_group("Levels", "in_tower_UI")
+	$TowerUI/TextureRect/VBoxContainer/CenterContainer/Upgrade/UpgradeInfo.visible = true
+
+func _on_Upgrade_mouse_exited():
+	get_tree().call_group("Levels", "exit_tower_UI")
+	$TowerUI/TextureRect/VBoxContainer/CenterContainer/Upgrade/UpgradeInfo.visible = false
+
+func _on_Sell_mouse_entered():
+	get_tree().call_group("Levels", "in_tower_UI")
+
+func _on_Sell_mouse_exited():
+	get_tree().call_group("Levels", "exit_tower_UI")
+	
+func _on_Cancel_mouse_entered():
+	get_tree().call_group("Levels", "in_tower_UI")
+
+func _on_Cancel_mouse_exited():
+	get_tree().call_group("Levels", "exit_tower_UI")
