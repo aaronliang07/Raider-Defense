@@ -1,0 +1,52 @@
+# Script for a basic mob, controlling functions such as spawning and despawning
+# All mobs inherit this script and add their own specific functions
+
+extends PathFollow2D
+
+var wave_size = 20
+
+export var value = 50
+export var money = 4
+export (float) var default_speed = 200
+var speed
+export (float) var max_offset = 32
+export var starting_health = 110
+var money_factor = 1
+
+signal lose_life
+signal update_score(score)
+
+# Function that lets us set mob health when it spawns, to permit health increases as game progresses
+func start(health):
+	# Slightly randomizing spawn location of mobs
+	$Area2D.position.x += rand_range(-max_offset, max_offset)
+	$Area2D.position.y += rand_range(-max_offset, max_offset)
+	$Area2D/Health/HealthBar.max_value = health
+	$Area2D/Health/HealthBar.value = health
+	speed = default_speed
+	
+func _physics_process(delta):
+	offset += speed	* delta
+	
+	# Despawn if soldier has reached end of the path
+	if unit_offset >= 0.99:
+		queue_free()
+		# Signaling to the main script to decrease player lives by 1
+		emit_signal('lose_life')
+
+		
+func hurt(damage):
+	$Area2D/Health/HealthBar.value -= damage
+	if $Area2D/Health/HealthBar.value <= 0:
+		queue_free()
+		# Sending a signal to the main script with the mob's value to be added to score
+		# And money value to be added to player's money
+		emit_signal('update_score', value, money, money_factor)
+
+func shocked(damage, shock_time, shock_speed):
+	hurt(damage)
+	# Applying a multiplier to slow down the enemies for a short period
+	speed *= shock_speed
+	# Pausing mob for the duration of the shock
+	yield(get_tree().create_timer(shock_time), "timeout")
+	speed = default_speed
