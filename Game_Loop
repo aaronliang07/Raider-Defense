@@ -1,0 +1,332 @@
+#The main game loop. Controls when enemies spawn and tracks user lives and money. Triggers other events such as game over and pause when necessary.
+
+extends Node2D
+
+const time_between_waves = 60
+const time_between_mobs = 0.5
+
+# Game variables
+var mobs_remaining
+var health_double_time = 4  # How many waves it takes for a mob's health to double
+var money_double_time = 15 # How many waves for a mob's money yield to double
+var boss_wave = false
+var test_instance
+
+# Build variables
+onready	var space_state = get_world_2d().direct_space_state
+var green = Color(0.17, 1, 0, 0.3)
+var red = Color(0.89, 0.09, 0.09, 0.4)
+var white = Color(1, 1, 1, 1)
+var current_color
+var can_build
+var current_tile = Vector2()
+var on_tower = false
+var in_UI = false
+
+# Gamestate variables
+var build_mode = false
+
+# Mobs
+var GreenSoldier = preload("res://Mobs/GreenSoldier.tscn")
+var RedSoldier = preload("res://Mobs/RedSoldier.tscn")
+var BeigeSoldier = preload("res://Mobs/BeigeSoldier.tscn")
+var GreenTank = preload("res://Mobs/GreenTank.tscn")
+var RedTank = preload("res://Mobs/RedTank.tscn")
+var BeigeTank = preload("res://Mobs/BeigeTank.tscn")
+var BossTank = preload("res://Mobs/BossTank.tscn")
+var current_mob
+var last_mob
+var wave_size
+var mobs_list = [GreenSoldier, RedSoldier, BeigeSoldier, GreenTank, RedTank, BeigeTank] 
+
+# Build mode textures
+var UI_turret = preload("res://tower-defense-top-down/PNG/Default size/towerDefense_tile291.png")
+var UI_missile = preload("res://tower-defense-top-down/PNG/Default size/towerDefense_tile249.png")
+var UI_sniper = preload("res://tanks/PNG/Default size/specialBarrel4.png")
+var UI_laser = preload("res://lasers/Tiles/laserUp.png")
+var UI_generator = preload("res://tower-defense-top-down/PNG/Default size/towerDefense_tile134.png")
+var UI_shock = preload("res://spaceshooter/PNG/ufoBlue.png")
+var range_img = preload("res://tower-defense-top-down/range.png")
+
+# Tower Scenes
+var turret = preload('res://Towers/Turret.tscn')
+var missile = preload("res://Towers/MissileTower.tscn")
+var sniper = preload("res://Towers/Sniper.tscn")
+var shock = preload("res://Towers/ShockTower.tscn")
+var generator = preload("res://Towers/Generator.tscn")
+var laser = preload("res://Towers/LaserTower.tscn")
+var current_tower 
+
+func _ready():
+	randomize()
+	global.score = 0
+	global.lives = 20
+	global.wave = 0
+	$UI/Panel/HBoxContainer/Lives.text = str(global.lives)
+	$UI/Panel/Wave.text = 'Wave ' + str(global.wave)
+	update_score(0, 0, 0)
+	# Making the game always start with a wave of 10 green soliders
+	current_mob	= GreenSoldier
+	last_mob = current_mob
+	# Instancing a temporary green soldier to fetch its wave size varialbe
+	# Should be a more efficient way to do this
+	test_instance = GreenSoldier.instance()
+	mobs_remaining = test_instance.wave_size
+	test_instance.queue_free()
+	$Next_wave_timer.start(time_between_waves)
+	$BuildTool.visible = false
+	# Connecting to the UI's buttons and their functions
+	$UI.connect('toggle_build_mode', self, 'toggle_build_mode')
+	$UI.connect('configure_build', self, 'configure_build')
+	$UI.connect('start_wave', self, '_on_Next_wave_timer_timeout')
+	# Added to levels group so the upgrade signal can be connected to without having to connect to each tower
+	add_to_group("Levels")
+
+# Changing to just _process means no skipped frames but potential lag
+# _physics_process means no lag but potential skipped frames
+func _process(delta):
+	# Show the timer
+	$UI/Panel/Next_wave_time.text = str(int($Next_wave_timer.time_left))
+	
+	if build_mode and not in_UI:
+		update_build_tool()
+		if Input.is_action_just_pressed("action"):
+			build_tower()
+		
+		if Input.is_action_just_pressed("ui_cancel"):
+			build_mode = false
+			$BuildTool.hide()
+
+func _on_Next_wave_timer_timeout():
+	start_wave()
+	update_wave_count()
+	
+func start_wave():
+	# Disable Next_wave_timer
+	$Next_wave_timer.stop()
+	# Disable 'next_wave' button while wave is happening
+	$UI/Panel/Start_next_wave.disabled = true
+	$UI/Panel/Start_next_wave.modulate = global.unavailable
+	$Spawn_timer.start(time_between_mobs)
+
+func _on_Spawn_timer_timeout():
+	spawn_mobs()
+
+func choose_mob():
+	# Choosing the mob for the next wave
+	# Making a boss tank spawn every 10 rounds
+	if boss_wave:
+		current_mob = BossTank
+		# Making mobs increase in health faster every 10 waves (semi-exponential) until cap 
+		health_double_time = max(2, health_double_time - 0.5)
+	else:
+		# Making sure the mob that just spawned doesn't spawn next wave
+		mobs_list.erase(last_mob)
+		mobs_list.shuffle()
+		current_mob = mobs_list.front()
+		# Not adding boss tank back to the list of mobs
+		mobs_list.append(last_mob)
+		last_mob = current_mob
+
+func spawn_mobs():
+	# Spawn a mob
+	var mob_instance 
+	mob_instance = current_mob.instance()
+	# Increaseing health as levels progress so that mob health doubles every 10 levels
+	var health = mob_instance.starting_health + (mob_instance.starting_health * (global.wave / float(health_double_time)))
+	mob_instance.start(health)
+	$TileMap/MobPath.add_child(mob_instance)
+	# Perform the function lose_life if mob reached the ended and emitted the signal to lose a life
+	mob_instance.connect('lose_life', self, 'lose_life')
+	mob_instance.connect('update_score', self, 'update_score')
+	mobs_remaining -= 1
+	
+	# If more mobs to spawn, spawn more. If no more, end the wave
+	if mobs_remaining > 0:
+		# Set mob spawn timer
+		$Spawn_timer.start(time_between_mobs)
+	elif mobs_remaining == 0:
+		# Choosing the mob for the next wave
+		choose_mob()
+		$Spawn_timer.stop()
+		# Re-enable wave button and reset mob amount
+		$Next_wave_timer.start(time_between_waves)
+
+		# Preparing to send in the corresponding number of mobs
+		test_instance = current_mob.instance()
+		add_child(test_instance)
+		mobs_remaining = test_instance.wave_size
+		test_instance.queue_free()
+		$UI/Panel/Start_next_wave.disabled = false
+		$UI/Panel/Start_next_wave.modulate = Color(1, 1, 1, 1)
+
+func lose_life():
+	global.lives -= 1
+	$UI/Panel/HBoxContainer/Lives.text = str(global.lives)
+	$LoseaLife.play()
+	# Displaying game over screen if player loses
+	if global.lives <= 0:
+		game_over()
+
+func update_build_tool():
+	var mouse_pos = get_local_mouse_position()
+	# Recalibrating mouse position as it was off by half a cell
+	current_tile = $TileMap.world_to_map(mouse_pos)
+	# Getting any overlapping areas from the 'Tower Bases' layer
+	# Prevents player from building on top of other towers
+	var overlapping_areas = space_state.intersect_point(get_global_mouse_position(), 32, [], 128, true, true)
+	# Need to add half the cell size to the return value of map_to_world because it and world_to_map are not inverse functions
+	# One refers to the upper corner of the tile and one refers to the center
+	$BuildTool.position = $TileMap.map_to_world(current_tile) + Vector2(16, 16)
+	# If the current tile can be built on (index of 2), shade the builder to green
+	# Also if overlapping areas returned nothing, means the space is clear of towers
+	if $TileMap.get_cellv(current_tile) == 0 and overlapping_areas == [] and current_color != green:
+		current_color = green
+		can_build = true
+		$BuildTool.set_modulate(current_color)
+		
+	# If the current tile cannot be built on, shade the builder to red
+	if ($TileMap.get_cellv(current_tile) != 0 or overlapping_areas != []) and current_color != red:
+		current_color = red
+		can_build = false
+		$BuildTool.set_modulate(current_color)
+
+func build_tower():
+	var new_tower = current_tower.instance()
+	$Towers.add_child(new_tower)
+	if can_build and global.total_money >= new_tower.cost:
+		new_tower.global_position = $TileMap.map_to_world(current_tile) + Vector2(16, 16)
+		new_tower.adjust_ui()
+		global.total_money -= new_tower.cost
+		new_tower.connect("sell", self, 'tower_sold')
+		update_money()
+		global.construct()
+		# Making you enter the newly build tower's UI
+		get_tree().call_group_flags(2, "Towers", "exit_UI")
+		new_tower.display_UI()
+	elif can_build:
+		global.invalid()
+		new_tower.queue_free()
+	else:
+		new_tower.queue_free()
+
+func update_wave_count():
+	# Updating wave count
+	global.wave += 1
+	$UI/Panel/Wave.text = 'Wave ' + str(global.wave)
+	if (global.wave + 1) % 10 == 0:
+		boss_wave = true
+	else:
+		boss_wave = false
+
+func update_score(value, money, money_factor):
+	# Updating score
+	global.score += value
+	# Applying a formula to scale up the amount of money earned depending on the wave
+	# Money_factor is just the ratio of mob's health to soldier's health
+	# Makes the money earned from each mob scale up linearly at different slopes depending on their health
+	# Also applies any money multipliers caused by the generator's final upgrade
+	money += int(global.wave/10) * money_factor
+	global.total_money += money
+	$UI/Panel/HBoxContainer/Score.text = str(global.score)	
+	update_money()
+
+func update_money():
+	$UI/Panel/HBoxContainer/Money.text = str(global.total_money)
+	shade_towers()
+	
+func tower_sold(cost, sell_value):
+	global.total_money += cost * sell_value
+	update_money()
+	$SellSound.play()
+
+func toggle_build_mode():
+	build_mode = not build_mode
+	$BuildTool.visible = not $BuildTool.visible	
+	current_tower = null
+	$UI/Panel/Cancel.visible = not $UI/Panel/Cancel.visible
+
+func configure_build(current_tower_UI, tower, range_scale):
+	# Converting the given strings into the respective variables
+	current_tower_UI = get(current_tower_UI)
+	tower = get(tower)
+	if not build_mode:
+		toggle_build_mode()
+		# Configuring all build mode variables for this specific tower
+		current_tower = tower
+		set_build_textures(current_tower_UI, range_img, range_scale)
+		$UI/Panel/Cancel.visible = true
+	elif build_mode and current_tower:
+		# If user is in build mode for another tower and clicks this tower, change to build mode for this tower
+		current_tower = tower
+		set_build_textures(current_tower_UI, range_img, range_scale)
+	else:
+		# Cancelling build mode if we were in build mode
+		toggle_build_mode()
+
+func set_build_textures(current_tower_UI, range_img, range_scale):
+	var scale_vector = Vector2(range_scale, range_scale)
+	$BuildTool/TowerSprite.texture = current_tower_UI
+	$BuildTool/Range/RangeSprite.texture = range_img
+	# Scaling the range image to represent the given tower's range
+	$BuildTool/Range.set_scale(scale_vector)
+	# Changing range color to be the normal range color
+
+# Prevents accidental building when clicking on tower UI
+func in_tower_UI():
+	in_UI = true
+	
+func exit_tower_UI():
+	in_UI = false
+
+# Can probably clean up all these signals into one function
+
+func shade_towers():
+	shade_turret()
+	shade_missile()
+	shade_sniper()
+	shade_shock_and_gen()
+	shade_laser()
+
+# Find some way to compact this and also not hard-code the tower costs
+func shade_turret():
+	if global.total_money >= 50:
+		$UI/Panel/VBoxContainer/HBoxContainer/Turret.modulate = white
+	else:
+		$UI/Panel/VBoxContainer/HBoxContainer/Turret.modulate = global.unavailable
+		
+func shade_missile():
+	if global.total_money >= 150:
+		$UI/Panel/VBoxContainer/HBoxContainer/Missile.modulate = white
+	else:
+		$UI/Panel/VBoxContainer/HBoxContainer/Missile.modulate = global.unavailable
+		
+func shade_sniper():
+	if global.total_money >= 250:
+		$UI/Panel/VBoxContainer/HBoxContainer2/Sniper.modulate = white
+	else:
+		$UI/Panel/VBoxContainer/HBoxContainer2/Sniper.modulate = global.unavailable
+		
+func shade_laser():
+	if global.total_money >= 500:
+		$UI/Panel/VBoxContainer/HBoxContainer3/Laser.modulate = white
+	else:
+		$UI/Panel/VBoxContainer/HBoxContainer3/Laser.modulate = global.unavailable
+
+func shade_shock_and_gen():
+	if global.total_money >= 400:
+		$UI/Panel/VBoxContainer/HBoxContainer2/Shock.modulate = white
+		$UI/Panel/VBoxContainer/HBoxContainer3/Generator.modulate = white
+	else:
+		$UI/Panel/VBoxContainer/HBoxContainer2/Shock.modulate = global.unavailable
+		$UI/Panel/VBoxContainer/HBoxContainer3/Generator.modulate = global.unavailable
+
+# Function called when a tower is upgraded
+func upgrade(upgrade_cost):
+	global.total_money -= upgrade_cost
+	global.upgrade()
+	update_money()
+
+func game_over():
+	get_tree().change_scene("res://Levels/GameOver.tscn")
+
